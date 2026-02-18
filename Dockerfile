@@ -7,7 +7,7 @@
 #   docker run --env-file .env -p 3000:3000 ironclaw:latest
 
 # Stage 1: Build
-FROM rust:1.92-slim-bookworm AS builder
+FROM rust:slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -36,6 +36,7 @@ COPY wit/ wit/
 # Copy WASM channel sources (required by build.rs)
 COPY channels-src/telegram/ channels-src/telegram/
 
+# Build the release binary
 RUN cargo build --release --bin ironclaw
 
 # Stage 2: Runtime
