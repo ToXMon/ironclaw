@@ -1,0 +1,120 @@
+# Docker Build and Push Workflow
+# Automatically builds and pushes Docker images to GitHub Container Registry
+# 
+# Triggers:
+# - Push to main branch -> tags :latest, :sha-<short-sha>
+# - Version tags (v*) -> tags :v1.0.0, :sha-<short-sha>
+#
+# Images are available at: ghcr.io/toxmon/ironclaw
+
+name: Docker Build & Push
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:  # Allow manual triggers
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write  # For OIDC token for cosign
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for proper versioning
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            # For version tags: v1.0.0 -> v1.0.0
+            type=semver,pattern={{version}}
+            # For version tags with major: v1.0.0 -> v1
+            type=semver,pattern={{major}}
+            # For main branch: latest
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Always include commit SHA for traceability
+            type=sha,prefix=sha-,format=short
+          labels: |
+            org.opencontainers.image.title=Ironclaw
+            org.opencontainers.image.description=Autonomous AI Agent powered by NEAR AI
+            org.opencontainers.image.vendor=ToXMon
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false  # Disable provenance for simpler image
+          sbom: false  # Disable SBOM for faster builds
+
+      - name: Output image digest
+        run: echo ${{ steps.build.outputs.digest }}
+
+      # Optional: Sign the image with cosign for verification
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign the published Docker image
+        if: github.event_name != 'pull_request'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          # Sign only if not a PR
+          cosign sign --yes "${TAGS%%$'\n'*}@${DIGEST}"
+
+  # Summary job for status checks
+  docker-summary:
+    runs-on: ubuntu-latest
+    needs: build
+    if: always()
+    steps:
+      - name: Job Summary
+        run: |
+          echo "## Docker Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.build.result }}" == "success" ]; then
+            echo "✅ Docker image built and pushed successfully" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Registry:** ghcr.io/toxmon/ironclaw" >> $GITHUB_STEP_SUMMARY
+            echo "**Platform:** linux/amd64" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ Docker build failed" >> $GITHUB_STEP_SUMMARY
+          fi
