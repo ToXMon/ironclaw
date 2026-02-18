@@ -29,6 +29,9 @@ COPY build.rs ./
 # Copy source code
 COPY src/ src/
 
+# Copy examples (required by Cargo.toml manifest)
+COPY examples/ examples/
+
 # Copy migrations and wit files
 COPY migrations/ migrations/
 COPY wit/ wit/
